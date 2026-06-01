@@ -1,13 +1,37 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+*.pyc
+*.pyo
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
+*.egg
+.pytest_cache/
+.coverage
 
 # Virtual environments
 .venv/
+venv/
+
+# Environment variables
 .env
+.env.local
+
+# OS
 .DS_Store
-**/.DS_Store
+.claude/.DS_Store
+docs/.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Scrapy
+.scrapy/
+
+# Logs
+*.log
