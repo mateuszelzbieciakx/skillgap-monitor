@@ -14,7 +14,6 @@ dużo przestrzeni, czysta typografia, subtelne akcenty.
 """
 
 import os
-from typing import Any
 
 import pandas as pd
 import plotly.express as px
@@ -60,7 +59,9 @@ CUSTOM_CSS = """
 /* Ukryj menu Streamlit i stopkę */
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
-header {visibility: hidden;}
+header[data-testid="stHeader"] {
+    background: transparent;
+}
 
 /* Kontener główny — max-width 1100px, wyśrodkowany */
 .block-container {
@@ -162,6 +163,7 @@ div[data-baseweb="select"] {
     padding-top: 2rem;
     border-top: 1px solid var(--border);
 }
+
 </style>
 """
 
@@ -205,217 +207,290 @@ PLOTLY_TEMPLATE = go.layout.Template(
     )
 )
 
+# Kolory per typ umowy — spójne przez wszystkie wykresy
+CONTRACT_COLORS: dict[str, str] = {
+    "b2b": "#0a84ff",
+    "uop": "#30d158",
+    "uod": "#ffcc00",
+    "other": "#bf5af2",
+}
+
+LEVEL_ORDER: list[str] = ["junior", "mid", "senior", "lead"]
+
+# Kolejność typów umów na wykresie słupkowym (uop przed b2b)
+CONTRACT_PLOT_ORDER: list[str] = ["uop", "uod", "b2b", "other"]
+
 
 # ==============================================================================
-# FUNKCJE ZAPYTAŃ SQL (bez zmian logiki)
+# FUNKCJE ZAPYTAŃ SQL
 # ==============================================================================
 
-@st.cache_data(ttl=300)
-def query_overview_metrics() -> dict[str, int | float]:
+@st.cache_data(ttl=300, show_spinner=False)
+def query_overview_metrics() -> dict[str, int]:
     """Pobiera metryki przeglądowe dla kart na stronie głównej.
 
+    Metryki nie reagują na filtry — przedstawiają stan całego zbioru danych.
+
     Returns:
-        Słownik z metrykami: total_offers, total_companies, median_b2b_senior, total_skills.
+        Słownik z kluczami: total_offers, total_companies, total_portals.
     """
     conn = psycopg2.connect(os.getenv("DATABASE_URL"))
     try:
         cur = conn.cursor()
 
-        # Liczba aktywnych ofert
         cur.execute("SELECT COUNT(*) FROM job_offers WHERE is_active = TRUE")
-        total_offers = cur.fetchone()[0]
+        total_offers: int = cur.fetchone()[0]
 
-        # Liczba firm
         cur.execute("SELECT COUNT(*) FROM companies")
-        total_companies = cur.fetchone()[0]
+        total_companies: int = cur.fetchone()[0]
 
-        # Mediana B2B Senior PLN
-        cur.execute("""
-            SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (
-                ORDER BY (salary_min + salary_max) / 2.0
-            )
-            FROM job_offers
-            WHERE is_active = TRUE
-              AND contract_type = 'b2b'
-              AND experience_level = 'senior'
-              AND currency = 'PLN'
-              AND salary_min IS NOT NULL
-              AND salary_max IS NOT NULL
-        """)
-        result = cur.fetchone()
-        median_b2b_senior = int(result[0]) if result and result[0] else 0
-
-        # Liczba unikalnych technologii
-        cur.execute("SELECT COUNT(DISTINCT standardized_name) FROM skill_taxonomy")
-        total_skills = cur.fetchone()[0]
+        cur.execute(
+            "SELECT COUNT(DISTINCT source_portal) FROM job_offers WHERE is_active = TRUE"
+        )
+        total_portals: int = cur.fetchone()[0]
 
         cur.close()
         return {
             "total_offers": total_offers,
             "total_companies": total_companies,
-            "median_b2b_senior": median_b2b_senior,
-            "total_skills": total_skills
+            "total_portals": total_portals,
         }
     finally:
         conn.close()
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def query_salary_stats(
-    contract_filter: str | None = None,
-    currency_filter: str = "PLN"
+    levels: list[str],
+    contracts: list[str],
+    portals: list[str],
+    salary_required: bool,
+    currency: str = "PLN",
 ) -> pd.DataFrame:
     """Pobiera statystyki wynagrodzeń per experience_level × contract_type.
 
     Args:
-        contract_filter: Typ umowy do filtrowania (None = wszystkie).
-        currency_filter: Waluta (domyślnie PLN).
+        levels: Filtr poziomów doświadczenia (ANY).
+        contracts: Filtr typów umów (ANY).
+        portals: Filtr portali źródłowych (ANY).
+        salary_required: Gdy True, wyklucza oferty bez widełek.
+        currency: Waluta (domyślnie PLN).
 
     Returns:
-        DataFrame z kolumnami: experience_level, contract_type, count, p25, median, p75.
+        DataFrame z kolumnami: experience_level, contract_type,
+        count, p25, median, p75, min_salary, max_salary.
+        Wartości wynagrodzeń jako float.
     """
-    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-    try:
-        query = """
+    salary_clause = (
+        "AND salary_min IS NOT NULL AND salary_max IS NOT NULL"
+        if salary_required else ""
+    )
+    query = f"""
         SELECT
             experience_level,
             contract_type,
-            COUNT(*) as count,
-            PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY (salary_min + salary_max) / 2.0) as p25,
-            PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY (salary_min + salary_max) / 2.0) as median,
-            PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY (salary_min + salary_max) / 2.0) as p75
+            COUNT(*) AS count,
+            PERCENTILE_CONT(0.25) WITHIN GROUP (
+                ORDER BY (salary_min + salary_max) / 2.0
+            ) AS p25,
+            PERCENTILE_CONT(0.50) WITHIN GROUP (
+                ORDER BY (salary_min + salary_max) / 2.0
+            ) AS median,
+            PERCENTILE_CONT(0.75) WITHIN GROUP (
+                ORDER BY (salary_min + salary_max) / 2.0
+            ) AS p75,
+            MIN((salary_min + salary_max) / 2.0) AS min_salary,
+            MAX((salary_min + salary_max) / 2.0) AS max_salary
         FROM job_offers
-        WHERE
-            is_active = TRUE
-            AND salary_min IS NOT NULL
-            AND salary_max IS NOT NULL
-            AND currency = %s
-            AND salary_period = 'month'
-        """
-        params = [currency_filter]
-
-        if contract_filter and contract_filter != "Wszystkie":
-            query += " AND contract_type = %s"
-            params.append(contract_filter.lower())
-
-        query += """
+        WHERE is_active = TRUE
+          AND salary_min IS NOT NULL
+          AND salary_max IS NOT NULL
+          AND currency = %(currency)s
+          AND salary_period = 'month'
+          AND experience_level = ANY(%(levels)s)
+          AND contract_type = ANY(%(contracts)s)
+          AND source_portal = ANY(%(portals)s)
+          {salary_clause}
         GROUP BY experience_level, contract_type
         HAVING COUNT(*) >= 3
         ORDER BY experience_level, contract_type
-        """
-
-        df = pd.read_sql_query(query, conn, params=params)
-        return df
+    """
+    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+    try:
+        return pd.read_sql_query(
+            query, conn,
+            params={
+                "currency": currency,
+                "levels": levels,
+                "contracts": contracts,
+                "portals": portals,
+            },
+        )
     finally:
         conn.close()
 
 
-@st.cache_data(ttl=300)
-def query_skill_premium(top_n: int = 20, currency_filter: str = "PLN") -> pd.DataFrame:
-    """Oblicza skill premium — różnicę median wynagrodzeń ze/bez skilla.
+@st.cache_data(ttl=300, show_spinner=False)
+def query_skill_premium(
+    levels: list[str],
+    contracts: list[str],
+    portals: list[str],
+    salary_required: bool,
+    top_n: int = 20,
+    currency: str = "PLN",
+) -> pd.DataFrame:
+    """Oblicza skill premium — różnicę median wynagrodzeń ofert ze/bez danego skilla.
 
     Args:
+        levels: Filtr poziomów doświadczenia (ANY).
+        contracts: Filtr typów umów (ANY).
+        portals: Filtr portali źródłowych (ANY).
+        salary_required: Gdy True, wyklucza oferty bez widełek.
         top_n: Liczba top skilli do zwrócenia.
-        currency_filter: Waluta (domyślnie PLN).
+        currency: Waluta (domyślnie PLN).
 
     Returns:
-        DataFrame z kolumnami: skill_name, median_with_skill, median_without_skill, premium.
+        DataFrame z kolumnami: skill_name, median_with_skill,
+        median_without_skill, premium. Wartości jako float.
     """
-    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-    try:
-        query = """
-        WITH skill_counts AS (
-            SELECT skill_id, COUNT(*) as offer_count
-            FROM offer_skills
-            GROUP BY skill_id
-            HAVING COUNT(*) >= 10
-        ),
-        overall_median AS (
-            SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (
-                ORDER BY (salary_min + salary_max) / 2.0
-            ) as median_salary
+    query = f"""
+        WITH base_offers AS (
+            SELECT id,
+                   (salary_min + salary_max) / 2.0 AS midpoint
             FROM job_offers
             WHERE is_active = TRUE
               AND salary_min IS NOT NULL
               AND salary_max IS NOT NULL
-              AND currency = %s
+              AND currency = %(currency)s
               AND salary_period = 'month'
+              AND experience_level = ANY(%(levels)s)
+              AND contract_type = ANY(%(contracts)s)
+              AND source_portal = ANY(%(portals)s)
+        ),
+        overall_median AS (
+            SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (
+                ORDER BY midpoint
+            ) AS median_salary
+            FROM base_offers
+        ),
+        skill_counts AS (
+            SELECT skill_id, COUNT(*) AS offer_count
+            FROM offer_skills os
+            JOIN base_offers bo ON os.offer_id = bo.id
+            GROUP BY skill_id
+            HAVING COUNT(*) >= 10
         ),
         skill_medians AS (
             SELECT
-                st.standardized_name as skill_name,
+                st.standardized_name AS skill_name,
                 PERCENTILE_CONT(0.5) WITHIN GROUP (
-                    ORDER BY (jo.salary_min + jo.salary_max) / 2.0
-                ) as median_with_skill
+                    ORDER BY bo.midpoint
+                ) AS median_with_skill
             FROM offer_skills os
             JOIN skill_taxonomy st ON os.skill_id = st.id
-            JOIN job_offers jo ON os.offer_id = jo.id
+            JOIN base_offers bo ON os.offer_id = bo.id
             WHERE os.skill_id IN (SELECT skill_id FROM skill_counts)
-              AND jo.is_active = TRUE
-              AND jo.salary_min IS NOT NULL
-              AND jo.salary_max IS NOT NULL
-              AND jo.currency = %s
-              AND jo.salary_period = 'month'
+              AND st.is_tech = TRUE
             GROUP BY st.standardized_name
         )
         SELECT
             sm.skill_name,
             sm.median_with_skill,
-            om.median_salary as median_without_skill,
-            (sm.median_with_skill - om.median_salary) as premium
+            om.median_salary AS median_without_skill,
+            (sm.median_with_skill - om.median_salary) AS premium
         FROM skill_medians sm
         CROSS JOIN overall_median om
         ORDER BY premium DESC
-        LIMIT %s
-        """
-        df = pd.read_sql_query(query, conn, params=[currency_filter, currency_filter, top_n])
-        return df
+        LIMIT %(top_n)s
+    """
+    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+    try:
+        return pd.read_sql_query(
+            query, conn,
+            params={
+                "currency": currency,
+                "levels": levels,
+                "contracts": contracts,
+                "portals": portals,
+                "top_n": top_n,
+            },
+        )
     finally:
         conn.close()
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def query_skill_gap(
+    levels: list[str],
+    contracts: list[str],
+    portals: list[str],
+    salary_required: bool,
     top_n: int = 15,
-    experience_filter: str | None = None
 ) -> pd.DataFrame:
-    """Pobiera najczęściej wymagane skille per experience_level × requirement_type.
+    """Pobiera top N skilli i rozkład must/nice dla każdego z nich.
+
+    Dwuetapowe zapytanie: najpierw wyłania top N skilli (po sumie must+nice),
+    następnie pobiera osobne liczby must i nice. Zapobiega znikaniu 'nice'
+    przy globalnym LIMIT.
 
     Args:
-        top_n: Liczba top skilli do zwrócenia.
-        experience_filter: Poziom doświadczenia do filtrowania (None = wszystkie).
+        levels: Filtr poziomów doświadczenia (ANY).
+        contracts: Filtr typów umów (ANY).
+        portals: Filtr portali źródłowych (ANY).
+        salary_required: Gdy True, wyklucza oferty bez widełek.
+        top_n: Liczba top skilli do wyłonienia.
 
     Returns:
-        DataFrame z kolumnami: skill_name, experience_level, requirement_type, count.
+        DataFrame z kolumnami: skill_name, requirement_type, count.
     """
-    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-    try:
-        query = """
+    salary_clause = (
+        "AND jo.salary_min IS NOT NULL AND jo.salary_max IS NOT NULL"
+        if salary_required else ""
+    )
+    query = f"""
+        WITH top_skills AS (
+            SELECT st.standardized_name AS skill_name
+            FROM offer_skills os
+            JOIN skill_taxonomy st ON os.skill_id = st.id
+            JOIN job_offers jo ON os.offer_id = jo.id
+            WHERE jo.is_active = TRUE
+              AND jo.experience_level = ANY(%(levels)s)
+              AND jo.contract_type = ANY(%(contracts)s)
+              AND jo.source_portal = ANY(%(portals)s)
+              {salary_clause}
+              AND st.is_tech = TRUE
+            GROUP BY st.standardized_name
+            ORDER BY COUNT(*) DESC
+            LIMIT %(top_n)s
+        )
         SELECT
-            st.standardized_name as skill_name,
-            jo.experience_level,
+            st.standardized_name AS skill_name,
             os.requirement_type,
-            COUNT(*) as count
+            COUNT(*) AS count
         FROM offer_skills os
         JOIN skill_taxonomy st ON os.skill_id = st.id
         JOIN job_offers jo ON os.offer_id = jo.id
         WHERE jo.is_active = TRUE
-        """
-        params: list[Any] = []
-
-        if experience_filter and experience_filter != "Wszystkie":
-            query += " AND jo.experience_level = %s"
-            params.append(experience_filter.lower())
-
-        query += """
-        GROUP BY st.standardized_name, jo.experience_level, os.requirement_type
-        ORDER BY count DESC
-        LIMIT %s
-        """
-        params.append(top_n)
-
-        df = pd.read_sql_query(query, conn, params=params)
-        return df
+          AND jo.experience_level = ANY(%(levels)s)
+          AND jo.contract_type = ANY(%(contracts)s)
+          AND jo.source_portal = ANY(%(portals)s)
+          {salary_clause}
+          AND st.standardized_name IN (SELECT skill_name FROM top_skills)
+          AND st.is_tech = TRUE
+        GROUP BY st.standardized_name, os.requirement_type
+        ORDER BY skill_name, requirement_type
+    """
+    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+    try:
+        return pd.read_sql_query(
+            query, conn,
+            params={
+                "levels": levels,
+                "contracts": contracts,
+                "portals": portals,
+                "top_n": top_n,
+            },
+        )
     finally:
         conn.close()
 
@@ -430,14 +505,60 @@ def main() -> None:
         page_title="SkillGap Monitor",
         page_icon="📊",
         layout="wide",
-        initial_sidebar_state="collapsed"
+        initial_sidebar_state="expanded"
     )
 
-    # Wstrzyknij custom CSS
+    if not os.getenv("DATABASE_URL"):
+        st.error("Brak zmiennej DATABASE_URL. Sprawdź plik .env.")
+        return
+
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
     # ========================================================================
-    # STRONA GŁÓWNA — nagłówek + karty metryk
+    # SIDEBAR — globalne filtry
+    # ========================================================================
+
+    with st.sidebar:
+        st.markdown("## Filtry")
+
+        all_levels = ["junior", "mid", "senior", "lead"]
+        levels: list[str] = st.pills(
+            "Poziom doświadczenia",
+            options=all_levels,
+            selection_mode="multi",
+            default=all_levels,
+        )
+
+        all_contracts = ["b2b", "uop", "uod", "other"]
+        contracts: list[str] = st.pills(
+            "Typ umowy",
+            options=all_contracts,
+            selection_mode="multi",
+            default=["b2b", "uop"],
+        )
+
+        all_portals = ["nofluffjobs", "justjoin"]
+        portals: list[str] = st.pills(
+            "Portal",
+            options=all_portals,
+            selection_mode="multi",
+            default=all_portals,
+        )
+
+        salary_required: bool = st.checkbox(
+            "Tylko oferty z wynagrodzeniem",
+            value=True,
+        )
+
+        with st.expander("ℹ️ O projekcie"):
+            st.markdown(
+                "**Autor:** Mateusz Elżbieciak  \n"
+                "**Źródła danych:** NoFluffJobs, JustJoin.it  \n"
+                "**Uczelnia:** Uniwersytet Ekonomiczny w Krakowie (UEK)"
+            )
+
+    # ========================================================================
+    # NAGŁÓWEK
     # ========================================================================
 
     st.markdown("<h1>SkillGap Monitor</h1>", unsafe_allow_html=True)
@@ -447,21 +568,22 @@ def main() -> None:
         Automatyczna analityka rynku pracy IT — wynagrodzenia, kompetencje, trendy.
         </p>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-    # Karty metryk — 4 kolumny
+    # ========================================================================
+    # KARTY METRYK — cały zbiór, bez filtrów
+    # ========================================================================
+
     metrics = query_overview_metrics()
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Oferty pracy", f"{metrics['total_offers']:,}")
     with col2:
         st.metric("Firmy", f"{metrics['total_companies']:,}")
     with col3:
-        st.metric("Mediana B2B Senior", f"{metrics['median_b2b_senior']:,} PLN")
-    with col4:
-        st.metric("Technologie", f"{metrics['total_skills']:,}")
+        st.metric("Portale", f"{metrics['total_portals']:,}")
 
     st.markdown("<div style='margin-top: 3rem;'></div>", unsafe_allow_html=True)
 
@@ -472,7 +594,7 @@ def main() -> None:
     tab1, tab2, tab3 = st.tabs([
         "💰 Salary Explorer",
         "🚀 Skill Premium",
-        "📈 Skill Gap"
+        "📈 Skill Gap",
     ])
 
     # ------------------------------------------------------------------------
@@ -481,89 +603,107 @@ def main() -> None:
     with tab1:
         st.markdown("### Rozkład wynagrodzeń")
         st.markdown(
-            "<p style='margin-bottom: 1.5rem;'>Mediana i percentyle (P25/P75) per poziom doświadczenia i typ umowy.</p>",
-            unsafe_allow_html=True
+            "<p style='margin-bottom: 1.5rem;'>"
+            "Mediana i percentyle (P25/P75) per poziom doświadczenia i typ umowy."
+            "</p>",
+            unsafe_allow_html=True,
         )
 
-        col1, col2 = st.columns(2)
-        with col1:
-            contract_type = st.selectbox(
-                "Typ umowy",
-                ["Wszystkie", "B2B", "UoP", "UoD", "Other"],
-                key="salary_contract"
-            )
-        with col2:
-            currency = st.selectbox(
-                "Waluta",
-                ["PLN", "EUR", "USD"],
-                key="salary_currency"
-            )
-
-        contract_filter = None if contract_type == "Wszystkie" else contract_type
-        df_salary = query_salary_stats(contract_filter, currency)
+        df_salary = query_salary_stats(levels, contracts, portals, salary_required)
 
         if df_salary.empty:
             st.warning("⚠️ Brak danych dla wybranych filtrów.")
         else:
-            # Przygotowanie danych do box plot
-            plot_data = []
-            for _, row in df_salary.iterrows():
-                label = f"{row['experience_level'].capitalize()} ({row['contract_type'].upper()})"
-                plot_data.extend([
-                    {"Grupa": label, "Wynagrodzenie": row['p25'], "experience_level": row['experience_level']},
-                    {"Grupa": label, "Wynagrodzenie": row['median'], "experience_level": row['experience_level']},
-                    {"Grupa": label, "Wynagrodzenie": row['p75'], "experience_level": row['experience_level']},
-                ])
+            fig = go.Figure()
 
-            df_plot = pd.DataFrame(plot_data)
+            present_contracts = df_salary["contract_type"].unique().tolist()
+            ordered_contracts = [c for c in CONTRACT_PLOT_ORDER if c in present_contracts]
+            ordered_contracts += [c for c in present_contracts if c not in CONTRACT_PLOT_ORDER]
 
-            # Kolejność kategorii
-            category_order = ["junior", "mid", "senior", "lead"]
-            ordered_groups = []
-            for level in category_order:
-                for ct in sorted(df_salary["contract_type"].unique()):
-                    label = f"{level.capitalize()} ({ct.upper()})"
-                    if label in df_plot["Grupa"].values:
-                        ordered_groups.append(label)
+            for contract in ordered_contracts:
+                df_ct = (
+                    df_salary[df_salary["contract_type"] == contract]
+                    .set_index("experience_level")
+                    .reindex(LEVEL_ORDER)
+                    .dropna(subset=["median"])
+                )
+                if df_ct.empty:
+                    continue
 
-            # Gradient kolorów per poziom
-            color_map = {
-                "junior": "#30d158",
-                "mid": "#0a84ff",
-                "senior": "#ff375f",
-                "lead": "#bf5af2"
-            }
+                x_vals = df_ct.index.tolist()
+                medians = df_ct["median"].tolist()
+                p25s = df_ct["p25"].tolist()
+                p75s = df_ct["p75"].tolist()
 
-            fig = px.box(
-                df_plot,
-                x="Grupa",
-                y="Wynagrodzenie",
-                color="experience_level",
-                color_discrete_map=color_map,
-                labels={"Wynagrodzenie": f"Wynagrodzenie ({currency})"},
-                category_orders={"Grupa": ordered_groups},
-                height=500
-            )
+                error_plus = [p75 - med for med, p75 in zip(medians, p75s)]
+                error_minus = [med - p25 for med, p25 in zip(medians, p25s)]
+
+                custom = [[int(round(p)), int(round(q))] for p, q in zip(p25s, p75s)]
+
+                fig.add_trace(go.Bar(
+                    name=contract.upper(),
+                    x=x_vals,
+                    y=[int(round(m)) for m in medians],
+                    error_y=dict(
+                        type="data",
+                        array=[int(round(e)) for e in error_plus],
+                        arrayminus=[int(round(e)) for e in error_minus],
+                        visible=True,
+                        color="rgba(255,255,255,0.45)",
+                        thickness=1.5,
+                        width=6,
+                    ),
+                    marker_color=CONTRACT_COLORS.get(contract, "#98989f"),
+                    customdata=custom,
+                    hovertemplate=(
+                        "Poziom: %{x}"
+                        f" | Umowa: {contract.upper()}"
+                        " | Mediana: %{y:,} PLN"
+                        " | P25: %{customdata[0]:,}"
+                        " | P75: %{customdata[1]:,}"
+                        "<extra></extra>"
+                    ),
+                ))
+
             fig.update_layout(
                 template=PLOTLY_TEMPLATE,
-                xaxis_tickangle=0,
-                showlegend=True,
+                barmode="group",
+                title="",
+                xaxis=dict(
+                    categoryorder="array",
+                    categoryarray=LEVEL_ORDER,
+                    title="",
+                ),
+                yaxis=dict(
+                    title="PLN",
+                    tickformat=",d",
+                ),
                 legend=dict(
-                    title="Poziom",
+                    title="Typ umowy",
                     orientation="h",
                     yanchor="bottom",
                     y=1.02,
                     xanchor="right",
-                    x=1
+                    x=1,
                 ),
-                title=None
+                height=500,
+                margin=dict(l=60, r=20, t=60, b=40),
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # Tabela szczegółów
             st.markdown("#### Szczegóły statystyk")
             df_display = df_salary.copy()
-            df_display.columns = ["Poziom", "Umowa", "Liczba ofert", "P25", "Mediana", "P75"]
+            for col in ["p25", "median", "p75", "min_salary", "max_salary"]:
+                df_display[col] = df_display[col].apply(
+                    lambda x: int(round(x)) if pd.notna(x) else None
+                )
+            df_display = df_display[[
+                "experience_level", "contract_type", "count",
+                "min_salary", "p25", "median", "p75", "max_salary"
+            ]]
+            df_display.columns = [
+                "Poziom", "Umowa", "Liczba ofert", "Min", "P25", "Mediana", "P75", "Max"
+            ]
             st.dataframe(df_display, use_container_width=True, hide_index=True)
 
     # ------------------------------------------------------------------------
@@ -571,51 +711,51 @@ def main() -> None:
     # ------------------------------------------------------------------------
     with tab2:
         st.markdown("### Skill Premium")
-        st.markdown(
-            "<p style='margin-bottom: 1.5rem;'>Top 20 umiejętności podnoszących medianę wynagrodzenia.</p>",
-            unsafe_allow_html=True
-        )
 
-        currency_premium = st.selectbox(
-            "Waluta",
-            ["PLN", "EUR", "USD"],
-            key="premium_currency"
-        )
-
-        df_premium = query_skill_premium(top_n=20, currency_filter=currency_premium)
+        df_premium = query_skill_premium(levels, contracts, portals, salary_required, top_n=20)
 
         if df_premium.empty:
-            st.warning("⚠️ Brak danych dla wybranej waluty.")
+            st.warning("⚠️ Brak danych dla wybranych filtrów.")
         else:
-            fig = px.bar(
-                df_premium,
-                x="premium",
-                y="skill_name",
+            df_premium_sorted = df_premium.sort_values("premium", ascending=True)
+            bar_colors = [
+                "#30d158" if v >= 0 else "#ff375f"
+                for v in df_premium_sorted["premium"]
+            ]
+            premium_ints = [int(round(v)) for v in df_premium_sorted["premium"]]
+
+            fig = go.Figure(go.Bar(
+                x=premium_ints,
+                y=df_premium_sorted["skill_name"].tolist(),
                 orientation="h",
-                labels={
-                    "premium": f"Premium ({currency_premium})",
-                    "skill_name": "Umiejętność"
-                },
-                color_discrete_sequence=["#0a84ff"]
-            )
+                marker_color=bar_colors,
+                customdata=[[v] for v in premium_ints],
+                hovertemplate=(
+                    "Skill: %{y} | Wzrost mediany: %{x:+,d} PLN<extra></extra>"
+                ),
+            ))
             fig.update_layout(
                 template=PLOTLY_TEMPLATE,
-                yaxis={"categoryorder": "total ascending"},
-                margin=dict(l=150, r=20, t=40, b=40),
+                title="",
+                xaxis=dict(title="Wzrost mediany (PLN)", tickformat=",d"),
+                yaxis=dict(title=""),
                 showlegend=False,
                 height=550,
-                title=None
+                margin=dict(l=160, r=20, t=40, b=40),
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # Tabela szczegółów
             st.markdown("#### Szczegóły premium")
             df_display = df_premium.copy()
+            for col in ["median_with_skill", "median_without_skill", "premium"]:
+                df_display[col] = df_display[col].apply(
+                    lambda x: int(round(x)) if pd.notna(x) else None
+                )
             df_display.columns = [
                 "Umiejętność",
                 "Mediana (ze skilliem)",
                 "Mediana (bez skilla)",
-                "Premium"
+                "Premium",
             ]
             st.dataframe(df_display, use_container_width=True, hide_index=True)
 
@@ -625,22 +765,26 @@ def main() -> None:
     with tab3:
         st.markdown("### Skill Gap")
         st.markdown(
-            "<p style='margin-bottom: 1.5rem;'>Top 15 najczęściej wymaganych umiejętności per poziom doświadczenia.</p>",
-            unsafe_allow_html=True
+            "<p style='margin-bottom: 1.5rem;'>"
+            "Top 15 najczęściej wymaganych umiejętności per poziom doświadczenia."
+            "</p>",
+            unsafe_allow_html=True,
         )
 
-        experience_level = st.selectbox(
-            "Poziom doświadczenia",
-            ["Wszystkie", "Junior", "Mid", "Senior", "Lead"],
-            key="gap_experience"
-        )
-
-        exp_filter = None if experience_level == "Wszystkie" else experience_level
-        df_gap = query_skill_gap(top_n=15, experience_filter=exp_filter)
+        df_gap = query_skill_gap(levels, contracts, portals, salary_required, top_n=15)
 
         if df_gap.empty:
-            st.warning("⚠️ Brak danych dla wybranego poziomu.")
+            st.warning("⚠️ Brak danych dla wybranych filtrów.")
         else:
+            # Kolejność skilli na osi Y — od najmniej do najbardziej popularnego
+            skill_totals = (
+                df_gap.groupby("skill_name")["count"]
+                .sum()
+                .sort_values(ascending=True)
+            )
+            skill_order = skill_totals.index.tolist()
+            chart_height = max(400, len(skill_order) * 55)
+
             fig = px.bar(
                 df_gap,
                 x="count",
@@ -648,49 +792,57 @@ def main() -> None:
                 color="requirement_type",
                 barmode="group",
                 orientation="h",
+                color_discrete_map={"must": "#0a84ff", "nice": "#30d158"},
+                category_orders={"requirement_type": ["nice", "must"]},
                 labels={
                     "count": "Liczba ofert",
                     "skill_name": "Umiejętność",
-                    "requirement_type": "Typ wymagania"
+                    "requirement_type": "Typ wymagania",
                 },
-                color_discrete_map={"must": "#ff375f", "nice": "#30d158"},
-                height=600
+                custom_data=["skill_name", "requirement_type", "count"],
+                height=chart_height,
+            )
+            fig.update_traces(
+                hovertemplate=(
+                    "Skill: %{customdata[0]}"
+                    " | Typ: %{customdata[1]}"
+                    " | Ofert: %{customdata[2]:,d}"
+                    "<extra></extra>"
+                )
             )
             fig.update_layout(
                 template=PLOTLY_TEMPLATE,
-                yaxis={"categoryorder": "total ascending"},
-                margin=dict(l=160, r=20, t=40, b=40),
+                title="",
+                xaxis=dict(title="Liczba ofert", tickformat=",d"),
+                yaxis=dict(
+                    title="",
+                    categoryorder="array",
+                    categoryarray=skill_order,
+                ),
+                bargap=0.4,
+                bargroupgap=0.15,
                 legend=dict(
                     title="Typ wymagania",
                     orientation="h",
                     yanchor="bottom",
                     y=1.02,
                     xanchor="right",
-                    x=1
+                    x=1,
                 ),
-                title=None
+                margin=dict(l=160, r=20, t=60, b=40),
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # Tabela szczegółów
             st.markdown("#### Szczegóły wymagań")
-            df_display = df_gap.copy()
-            df_display.columns = ["Umiejętność", "Poziom", "Typ wymagania", "Liczba ofert"]
+            df_display = df_gap[["skill_name", "requirement_type", "count"]].copy()
+            df_display.columns = ["Umiejętność", "Typ wymagania", "Liczba ofert"]
             st.dataframe(df_display, use_container_width=True, hide_index=True)
 
     # ========================================================================
-    # FOOTER z indeksem
+    # STOPKA
     # ========================================================================
 
-    st.markdown(
-        """
-        <div class='footer-custom'>
-            Projekt akademicki: <strong>Mateusz Elżbieciak (Indeks: 233651)</strong><br>
-            Informatyka Stosowana, Uniwersytet Ekonomiczny w Krakowie
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    st.caption("Autor projektu: Mateusz Elżbieciak")
 
 
 if __name__ == "__main__":

@@ -195,13 +195,26 @@ class JustJoinSpider(scrapy.Spider):
         contract_raw = selected.get("type", "")
         contract_type = CONTRACT_MAPPING.get(contract_raw, "other")
 
-        unit = selected.get("unit", "Month")
-        salary_period = "hourly" if (unit or "").lower() == "hour" else "monthly"
-
+        unit_raw = (selected.get("unit") or "month").lower()
         from_val = selected.get("from")
         to_val = selected.get("to")
         salary_min = float(from_val) if from_val is not None else None
         salary_max = float(to_val) if to_val is not None else None
+
+        if unit_raw == "hour":
+            salary_period = "hourly"
+            # Sanity-check: JustJoin bywa niespójny w polu 'unit'. Stawka godzinowa
+            # > 500 PLN nie istnieje — to faktycznie kwota miesięczna z błędnym unit.
+            midpoint = None
+            if salary_min is not None and salary_max is not None:
+                midpoint = (salary_min + salary_max) / 2.0
+            if midpoint is not None and midpoint > 500:
+                salary_period = "monthly"
+        elif unit_raw == "month":
+            salary_period = "monthly"
+        else:
+            # Nieobsługiwany okres (Day, Year) — pomiń wynagrodzenie
+            return None, None, "PLN", "monthly", contract_type
 
         return salary_min, salary_max, "PLN", salary_period, contract_type
 
