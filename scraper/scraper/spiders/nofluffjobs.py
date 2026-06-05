@@ -22,7 +22,7 @@ TECHNOLOGIES = [
 ]
 
 # Ile stron na technologię (20 ofert/strona → max ~100 ofert/tech przy 5 stronach)
-PAGES_PER_TECH = 5
+PAGES_PER_TECH = 10
 
 BASE_URL = "https://nofluffjobs.com"
 SEARCH_ENDPOINT = f"{BASE_URL}/api/search/posting"

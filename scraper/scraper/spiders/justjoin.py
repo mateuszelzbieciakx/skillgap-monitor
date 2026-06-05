@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://justjoin.it"
 API_ENDPOINT = f"{BASE_URL}/api/candidate-api/offers"
 PAGE_SIZE = 100
-MAX_ITEMS = 1000
+MAX_ITEMS = 10000
 
 # Priorytet wyboru typu umowy przy salary extraction
 CONTRACT_PRIORITY = ["b2b", "permanent", "mandate_contract"]
