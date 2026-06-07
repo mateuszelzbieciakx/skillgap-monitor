@@ -1,127 +1,227 @@
-# 🎯 SkillGap Monitor
+# SkillGap Monitor
 
-**Zautomatyzowany system analityczny (Data Engineering) do monitorowania rynku pracy IT, wyliczania median wynagrodzeń oraz identyfikacji luk kompetencyjnych kandydatów (Skill Gap).**
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+![Scrapy](https://img.shields.io/badge/Scrapy-2.16-60A839?logo=scrapy&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Supabase-4169E1?logo=postgresql&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.57-FF4B4B?logo=streamlit&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green)
 
-Projekt zrealizowany w ramach zajęć na kierunku Informatyka Stosowana.
-* **Autor:** Mateusz Elżbieciak
-* **Nr indeksu:** 233651
-* **Uczelnia:** Uniwersytet Ekonomiczny w Krakowie (UEK)
-* **Docelowe przeznaczenie:** Portfolio inżynierskie (Junior Python Developer / DevOps Engineer)
-
----
-
-## 🛠️ Architektura i Stos Technologiczny
-
-Projekt opiera się na nowoczesnej architekturze przetwarzania danych:
-* **Ekstrakcja Danych:** Python 3.11+, framework `Scrapy` (pobieranie danych z ukrytych API JSON w trybie *Polite Scraping*).
-* **Baza Danych:** `PostgreSQL` hostowany w chmurze Supabase (znormalizowana struktura 3NF).
-* **Zarządzanie Środowiskiem:** `uv` (Astral) - ultraszybki menedżer pakietów z plikiem `pyproject.toml`.
-* **Warstwa Analityczna & GUI:** Biblioteka `Streamlit`.
-* **Moduł AI (BYOK):** API OpenAI używane do tłumaczenia zapytań w języku naturalnym na bezpieczny kod SQL (Text-to-SQL).
+**Automatyczny system analityki rynku pracy IT w Polsce — wynagrodzenia, kompetencje, luki technologiczne.**
 
 ---
 
-## 🚀 Główne Funkcjonalności i Założenia Biznesowe
+## 📖 O projekcie
 
-1. **Mechanizm Upsert & Soft Delete:** System rozwiązuje problem duplikatów ofert między portalami, stosując klauzulę `ON CONFLICT DO UPDATE`. Ogłoszenia usunięte z sieci otrzymują flagę `is_active = FALSE` po 48h, co pozwala liczyć wskaźnik *Time-to-Fill*.
-2. **Kalkulator "Skill Gap":** Zastosowanie operacji na zbiorach (Set Theory) do porównywania kompetencji kandydata z twardymi wymaganiami rynkowymi.
-3. **Analiza Finansowa:** Ścisła separacja w bazie danych wynagrodzeń w formacie B2B (netto) od UoP (brutto) zapobiegająca przekłamaniom statystycznym.
-4. **Bezpieczeństwo AI:** Dedykowana rola bazodanowa `ai_read_only` blokująca możliwość wykonania wstrzyknięcia SQL (SQL Injection) przez model LLM.
+SkillGap Monitor to system Data Engineering automatycznie pozyskujący oferty pracy IT z portali NoFluffJobs i JustJoin.it poprzez reverse-engineered API JSON. Zebrane dane trafiają przez walidujące pipeline'y do znormalizowanej bazy PostgreSQL, skąd Streamlit Dashboard prezentuje trzy wymiary analityczne: mediany wynagrodzeń, wpływ konkretnych skilli na zarobki (Skill Premium) oraz ranking najczęściej wymaganych kompetencji (Skill Gap).
+
+Wartość biznesowa systemu koncentruje się na rynku HR i kandydatach: dział rekrutacji zyskuje benchmark płac z separacją B2B (netto) od UoP (brutto), eliminując przekłamania statystyczne. Analiza Skill Premium odpowiada na pytanie *„o ile PLN podnosi moje wynagrodzenie znajomość Kubernetes?"*, a Skill Gap wizualizuje ścieżkę kariery junior→senior przez pryzmat wymagań rzeczywistego rynku — nie ogólnych poradników.
+
+Projekt zrealizowany w ramach studiów na kierunku Informatyka Stosowana na Uniwersytecie Ekonomicznym w Krakowie (indeks: 233651) i stanowi flagowy element portfolio Junior Python Developer / Data Engineer — demonstrując umiejętności w zakresie web scrapingu, inżynierii danych, modelowania relacyjnych baz danych i wizualizacji analitycznej.
 
 ---
 
-## 📋 Struktura Podziału Pracy (WBS)
+## 📸 Dashboard
 
-```text
-🎯 PROJEKT: SKILLGAP MONITOR (WBS)
-│
-├── 🗄️ FAZA 1: Środowisko i Baza Danych (Data Storage)
-│   ├── 1.1 Konfiguracja bazy w chmurze (Supabase)
-│   ├── 1.2 Wdrożenie struktury tabel DDL (3NF)
-│   ├── 1.3 Utworzenie ról bezpieczeństwa (ai_read_only)
-│   └── 1.4 Konfiguracja zmiennych środowiskowych (.env)
-│
-├── 🕷️ FAZA 2: Ekstrakcja Danych (Scraping)
-│   ├── 2.1 Inicjalizacja frameworka Scrapy
-│   ├── 2.2 Konfiguracja polityki Polite Scraping (Anty-Ban)
-│   ├── 2.3 Budowa pająków pobierających z ukrytych API (JSON)
-│   └── 2.4 Zmapowanie odpowiedzi do obiektów (JobOfferItem)
-│
-├── ⚙️ FAZA 3: Przetwarzanie Danych (Data Pipelines)
-│   ├── 3.1 ValidationPipeline: Czyszczenie HTML, flagi B2B/UoP
-│   ├── 3.2 PostgresPipeline: Zapis logiką UPSERT (bez duplikatów)
-│   ├── 3.3 Implementacja logiki czasu widoczności (Soft Delete)
-│   └── 3.4 Budowa modułu alertującego (Webhook) przy braku danych
-│
-├── 🧠 FAZA 4: Logika Biznesowa i Algorytmy
-│   ├── 4.1 Zimny Start: Skrypt AI budujący początkowy słownik IT
-│   ├── 4.2 Mechanizm mapowania surowych tagów na słownik w locie
-│   └── 4.3 Silnik kalkulacji "Skill Gap" oparty na teorii zbiorów
-│
-├── 🖥️ FAZA 5: Aplikacja B2C i Moduł AI (Frontend)
-│   ├── 5.1 Inicjalizacja dashboardu analitycznego w Streamlit
-│   ├── 5.2 Budowa formularza profilowania kandydata
-│   ├── 5.3 Wizualizacja danych (wykresy zarobków per kontrakt)
-│   └── 5.4 Wdrożenie modułu OpenAI (BYOK) Text-to-SQL
-│
-└── 📋 FAZA 6: Zamknięcie i Dokumentacja
-    ├── 6.1 Generowanie raportów technicznych (Indeks: 233651)
-    └── 6.2 Opracowanie GitHub README (diagramy, instrukcje uruchomienia)
+![SkillGap Monitor Dashboard](docs/screenshot.png)
+
+> Dashboard analityczny z trzema zakładkami: Salary Explorer, Skill Premium, Skill Gap.
+
+---
+
+## 🏗️ Architektura systemu
+
+```
+┌─────────────────────┐    ┌─────────────────────┐
+│  NoFluffJobs API    │    │   JustJoin.it API   │
+│  (POST lista +      │    │  (GET candidate-api │
+│   GET szczegóły)    │    │   /offers, offset)  │
+└────────┬────────────┘    └──────────┬──────────┘
+         │                            │
+         └──────────┬─────────────────┘
+                    ▼
+         ┌─────────────────────┐
+         │   Scrapy Spiders    │
+         │  DOWNLOAD_DELAY=2.5 │
+         │  AutoThrottle ON    │
+         └──────────┬──────────┘
+                    ▼
+         ┌─────────────────────┐
+         │  ValidationPipeline │
+         │  (salary, HTML,     │
+         │   normalizacja)     │
+         └──────────┬──────────┘
+                    ▼
+         ┌─────────────────────┐
+         │  PostgresPipeline   │
+         │  (UPSERT + Soft     │
+         │   Delete + dedup)   │
+         └──────────┬──────────┘
+                    ▼
+         ┌─────────────────────┐
+         │  Supabase           │
+         │  (PostgreSQL 15)    │
+         │  4 tabele, 3NF      │
+         └──────────┬──────────┘
+                    ▼
+         ┌─────────────────────┐
+         │ Streamlit Dashboard │
+         │ 3 zakładki analityk.│
+         └─────────────────────┘
 ```
 
----
+**Warstwa ekstrakcji (Scrapy):** Dwa pająki pobierają dane wyłącznie z nieudokumentowanych endpointów JSON (Fetch/XHR — bez parsowania HTML). Spider NoFluffJobs stosuje architekturę dwustopniową: POST na endpoint listy ofert z paginacją per-technologia, następnie GET szczegółów każdej oferty po ID (pełne `requirements`). Spider JustJoin.it to jednokrokowy GET z paginacją offsetową. Oba działają z `DOWNLOAD_DELAY=2.5` i AutoThrottle w celu przestrzegania zasad Polite Scraping.
 
-## 📅 Harmonogram Prac (Sprinty Agile)
+**Warstwa przetwarzania (Pipelines):** `ValidationPipeline` (priority 100) waliduje wynagrodzenia przez scentralizowany moduł z progami rynkowymi (B2B min 6 000 PLN/mies., stawka godzinowa 20–500 PLN), normalizuje `experience_level` i `contract_type`, usuwa tagi HTML z pól tekstowych. `PostgresPipeline` (priority 200) zapisuje dane przez UPSERT (`ON CONFLICT DO UPDATE`), stosuje Soft Delete (`is_active = FALSE`) zamiast fizycznego usuwania rekordów oraz deduplikuje po kluczu `(source_portal, external_id)`.
 
-### Sprint 1: Fundamenty, Inżynieria Danych i Pierwsze Zbiory
-* **Cel:** Baza stoi w chmurze, a Scrapy potrafi autonomicznie zasysać oferty, nie tworząc duplikatów i rozróżniając B2B od UoP.
-* **Zakres:** Faza 1 (Całość), Faza 2 (Całość), Faza 3 (3.1, 3.2, 3.3).
+**Warstwa danych (PostgreSQL / Supabase):** Cztery tabele w 3NF: `companies`, `job_offers` (z `salary_period`, `contract_type`, `is_active`), `offer_skills` (z `requirement_type`: must/nice), `skill_taxonomy` (z `standardized_name` dla normalizacji skilli). Rola `ai_read_only` z uprawnieniami wyłącznie `SELECT` przygotowana pod przyszły moduł Text-to-SQL.
 
-### Sprint 2: Analityka, Czystość Danych i Monitoring
-* **Cel:** System potrafi zmapować "brudne" technologie rekruterów na czysty słownik. Pająki działają stabilnie, a w razie awarii API portalu wysyłają alert.
-* **Zakres:** Faza 3 (3.4 - Webhook), Faza 4 (Całość).
-
-### Sprint 3: Interfejs, AI i Portfolio
-* **Cel:** Aplikacja otrzymuje interfejs Streamlit. Działa moduł Text-to-SQL. Projekt jest spakowany pod kątem wymagań rekrutacyjnych.
-* **Zakres:** Faza 5 (Całość), Faza 6 (Całość).
+**Warstwa prezentacji (Streamlit):** Dashboard z ciemnym motywem (dark theme inspirowany Apple) i trzema zakładkami analitycznymi. Globalne filtry (portal, poziom doświadczenia, typ umowy) aplikowane przez `@st.cache_data` z TTL 5 min.
 
 ---
 
-## 💻 Instrukcja Uruchomienia (Local Setup)
+## 🛠️ Stack
 
-Ten projekt wykorzystuje nowoczesnego menedżera pakietów `uv`.
+| Warstwa           | Technologia         | Wersja   |
+|-------------------|---------------------|----------|
+| Język             | Python              | 3.13     |
+| Menedżer pakietów | uv (Astral)         | latest   |
+| Scraping          | Scrapy              | 2.16     |
+| Baza danych       | PostgreSQL (Supabase)| 15      |
+| Dashboard         | Streamlit           | 1.57     |
+| Sterownik DB      | psycopg2            | latest   |
+| Zmienne środow.   | python-dotenv       | latest   |
 
-### 1. Sklonuj repozytorium
+---
+
+## 📊 Źródła danych
+
+| Portal        | Metoda scrapingu                                             |
+|---------------|--------------------------------------------------------------|
+| NoFluffJobs   | Dwustopniowy: POST lista (paginacja per-technologia) + GET szczegóły — reverse engineering przez DevTools |
+| JustJoin.it   | Jednokrokowy GET candidate-api `/offers` z paginacją offsetową |
+
+Łącznie ~10 000+ aktywnych ofert IT z Polski. Zakres technologii: Python, Java, JavaScript, TypeScript, C#, Go, Rust, Kotlin, Scala, React, Angular, Docker, Kubernetes, AWS i inne.
+
+Dane pochodzą z publicznych portali pracy i są wykorzystywane wyłącznie do celów analitycznych i edukacyjnych.
+
+---
+
+## 📈 Funkcje analityczne
+
+### Salary Explorer
+
+Mediana wynagrodzeń (PLN) z przedziałem P25–P75 per poziom doświadczenia (junior/mid/senior/lead) i typ umowy (B2B/UoP/UoD). Mediana zamiast średniej arytmetycznej eliminuje wpływ outlierów — kilka ofert z wynagrodzeniem 5× rynkowym nie przekłamuje obrazu. Globalne filtry pozwalają zawęzić analizę do konkretnego portalu, poziomu lub rodzaju kontraktu.
+
+### Skill Premium
+
+Mierzy wpływ konkretnej umiejętności na medianę wynagrodzenia metodą **within-level**: porównanie mediany ofert *z* danym skillem vs. mediany ofert *bez* niego — w obrębie tego samego poziomu doświadczenia. Kontrola za poziom doświadczenia eliminuje najbardziej oczywistą zmienną zakłócającą (senior zarabia więcej i zna więcej technologii). Wynik: ranking skilli z informacją *„+X PLN / −X PLN do mediany"*.
+
+### Skill Gap
+
+Ranking 15 najczęściej wymaganych umiejętności per poziom doświadczenia z rozróżnieniem `must-have` (twarde wymagania) vs. `nice-to-have`. Wizualizuje, które kompetencje są obowiązkowe na poziomie junior, a które dopiero na senior — dając konkretną mapę drogową rozwoju kariery opartą o dane rynkowe.
+
+---
+
+## 🚀 Uruchomienie lokalne
+
+### Wymagania
+
+- Python 3.13+
+- `uv` — menedżer pakietów: `pip install uv`
+- Darmowe konto [Supabase](https://supabase.com) z bazą PostgreSQL
+
+### Setup
+
+**1. Sklonuj repozytorium**
 ```bash
-git clone [https://github.com/TwojNick/skillgap-monitor.git](https://github.com/TwojNick/skillgap-monitor.git)
+git clone https://github.com/matix-elzbi/skillgap-monitor.git
 cd skillgap-monitor
 ```
 
-### 2. Skonfiguruj zmienne środowiskowe
-Utwórz plik `.env` w głównym katalogu projektu:
-```env
-# URL połączenia z bazą danych PostgreSQL (Supabase)
-DATABASE_URL="postgresql://postgres:HASLO@adres-supabase.com:6543/postgres"
-
-# Klucz do API OpenAI (Moduł Text-to-SQL)
-OPENAI_API_KEY="sk-proj-twoj_tajny_klucz"
-```
-
-### 3. Zainstaluj zależności i aktywuj środowisko
+**2. Zainstaluj zależności**
 ```bash
 uv sync
 ```
 
-Aktywacja wirtualnego środowiska:
-* **Windows (PowerShell):** `.venv\Scripts\activate`
-* **Mac/Linux:** `source .venv/bin/activate`
-
-### 4. Inicjalizacja bazy danych (Faza 1)
+**3. Skonfiguruj zmienne środowiskowe**
 ```bash
-uv run scripts/init_db.py
+cp .env.example .env
+# Uzupełnij DATABASE_URL w pliku .env (Transaction Pooler Supabase, port 6543)
 ```
 
-### 5. Uruchomienie aplikacji Streamlit (Faza 5)
+**4. Zainicjalizuj schemat bazy danych**
 ```bash
-streamlit run app/main.py
+uv run python scripts/init_db.py
 ```
+
+**5. Uruchom scrapery**
+```bash
+cd scraper
+uv run scrapy crawl justjoin -L INFO
+uv run scrapy crawl nofluffjobs -L INFO
+```
+
+**6. Uruchom dashboard**
+```bash
+cd ..
+uv run streamlit run app/main.py
+```
+
+---
+
+## 📁 Struktura projektu
+
+```
+skillgap_scraper/
+├── app/
+│   └── main.py                          # Streamlit dashboard (3 zakładki analityczne)
+├── scraper/
+│   └── scraper/
+│       ├── spiders/
+│       │   ├── nofluffjobs.py           # Spider dwustopniowy (POST lista + GET szczegóły)
+│       │   └── justjoin.py              # Spider JustJoin.it (jednokrokowy GET)
+│       ├── items.py                     # Wspólny JobOfferItem dla wszystkich portali
+│       ├── pipelines.py                 # ValidationPipeline + PostgresPipeline
+│       └── settings.py                  # Polite Scraping (delay, autothrottle)
+├── migrations/
+│   ├── 001_normalize_skill_taxonomy.sql
+│   ├── 002_*.sql
+│   ├── 003_*.sql
+│   └── 004_clean_all_salary_bugs.sql
+├── docs/                                # Dokumentacja projektowa (PRD, WBS, STATUS)
+├── scripts/
+│   ├── init_db.py                       # DDL — inicjalizacja schematu bazy
+│   └── bootstrap_skills.py             # Seed początkowego słownika skill_taxonomy
+├── .env                                 # Zmienne środowiskowe — NIE commitować
+├── .env.example                         # Szablon .env
+├── pyproject.toml                       # Zależności projektu (uv)
+└── README.md
+```
+
+---
+
+## ⚠️ Znane ograniczenia
+
+- **Normalizacja taksonomii skilli** jest częściowa — mapowanie `raw_name → standardized_name` pokrywa główne aliasy (np. "Postgres" → "PostgreSQL"), ale long-tail technologii z ofert pozostaje nienormalizowany. Pełna normalizacja to Future Work.
+- **Skill Premium** metodą within-level kontroluje poziom doświadczenia jako zmienną zakłócającą, ale nie kontroluje innych czynników (branża, wielkość firmy, lokalizacja). Interpretacja wyników powinna uwzględniać ten kontekst.
+- **Próbka ~10 000 ofert** stanowi reprezentatywny przekrój rynku IT w Polsce, ale nie jest pełną populacją. Portale nie udostępniają historycznych danych — snapshot odzwierciedla stan rynku w momencie scrapingu.
+
+---
+
+## 🔮 Future Work
+
+- **Trzeci portal — Bulldogjob:** spider jednokrokowy, mapowanie do wspólnego `JobOfferItem`
+- **Moduł AI Text-to-SQL (BYOK):** zapytania w języku naturalnym tłumaczone na SQL przez LLM, wykonywane wyłącznie przez rolę `ai_read_only` (brak uprawnień zapisu)
+- **Scheduled scraping:** automatyczne odświeżanie danych przez AWS EventBridge lub GitHub Actions (cron), Soft Delete ofert niewidzianych >48h
+- **Wdrożenie chmurowe:** AWS EC2 + RDS lub Supabase + Railway dla Streamlit
+- **Testy jednostkowe:** pytest dla `ValidationPipeline._validate_salary` (przypadki brzegowe: odwrócone widełki, nieobsługiwany period, wartości ujemne)
+
+---
+
+## 👤 Autor
+
+**Mateusz Elżbieciak**
+Informatyka Stosowana, Uniwersytet Ekonomiczny w Krakowie (UEK)
+Indeks: 233651
+
+*Projekt akademicki + element portfolio. Dane pochodzą z publicznych portali pracy i są wykorzystywane wyłącznie do celów analitycznych.*
