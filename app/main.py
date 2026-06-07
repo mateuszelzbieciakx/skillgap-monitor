@@ -393,7 +393,7 @@ def query_skill_premium(
             FROM offer_skills os
             JOIN base_offers bo ON os.offer_id = bo.id
             GROUP BY skill_id
-            HAVING COUNT(*) >= 10
+            HAVING COUNT(*) >= 5
         ),
         skill_premium AS (
             SELECT
@@ -738,14 +738,25 @@ def main() -> None:
             ]
             premium_ints = [int(round(v)) for v in df_premium_sorted["premium"]]
 
+            # Przygotuj customdata: [premium_int, tooltip_suffix]
+            # Suffix dla ujemnych zawiera <br> — Plotly nie wspiera logiki w szablonie
+            custom = []
+            for v in premium_ints:
+                if v < 0:
+                    suffix = "<br>Skill ten koreluje z niższymi wynagrodzeniami — najczęściej role support, QA lub junior."
+                else:
+                    suffix = ""
+                custom.append([v, suffix])
+
             fig = go.Figure(go.Bar(
                 x=premium_ints,
                 y=df_premium_sorted["skill_name"].tolist(),
                 orientation="h",
                 marker_color=bar_colors,
-                customdata=[[v] for v in premium_ints],
+                customdata=custom,
                 hovertemplate=(
-                    "Skill: %{y} | Wzrost mediany: %{x:+,d} PLN<extra></extra>"
+                    "Skill: %{y} | Wzrost mediany: %{x:+,d} PLN"
+                    "%{customdata[1]}<extra></extra>"
                 ),
             ))
             fig.update_layout(

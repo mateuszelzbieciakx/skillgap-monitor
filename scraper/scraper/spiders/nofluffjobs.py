@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 TECHNOLOGIES = [
     "Python", "Java", "JavaScript", "TypeScript", "C#",
     "Go", "Rust", "Kotlin", "Scala", "React", "Angular",
+    # nowe:
+    "Docker", "Kubernetes", "AWS", "DevOps", "PHP",
+    "Ruby", "Vue", "Node.js", "Swift", "Flutter",
+    "Terraform", "Linux", "Spark", "Kafka", "Elasticsearch",
 ]
 
 # Ile stron na technologię (20 ofert/strona → max ~100 ofert/tech przy 5 stronach)
