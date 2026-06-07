@@ -21,6 +21,18 @@ from scraper.items import JobOfferItem
 
 load_dotenv()
 
+# Progi walidacji wynagrodzeń (PLN, rynek IT Polska 2026)
+# Dolny próg miesięczny zależny od typu umowy — B2B nie schodzi tak nisko jak UoD/UoP
+SALARY_MONTH_MIN: dict[str, float] = {
+    "b2b": 6000.0,
+    "uop": 3000.0,
+    "uod": 3000.0,
+    "other": 3000.0,
+}
+SALARY_MONTH_MAX: float = 150000.0   # górny sufit miesięczny
+SALARY_HOUR_MIN: float = 20.0        # min stawka godzinowa
+SALARY_HOUR_MAX: float = 500.0       # max realna stawka godzinowa; powyżej = błędny unit
+
 
 class ValidationPipeline:
     """Waliduje i normalizuje dane JobOfferItem przed zapisem do bazy.
@@ -90,7 +102,80 @@ class ValidationPipeline:
         else:
             item['contract_type'] = contract
 
+        self._validate_salary(item)
         return item
+
+    def _validate_salary(self, item: JobOfferItem) -> None:
+        """Waliduje i czyści pola salary w item in-place.
+
+        Obsługuje brak widełek, odwrócone widełki, nierealne wartości
+        oraz nieobsługiwane okresy rozliczeniowe. Wyzerowanie salary
+        nie powoduje odrzucenia oferty (DropItem).
+
+        Args:
+            item: Oferta pracy z polami salary_min, salary_max,
+                  salary_period i contract_type (już znormalizowanym).
+        """
+        salary_min: float | None = item.get('salary_min')
+        salary_max: float | None = item.get('salary_max')
+        period: str = item.get('salary_period', '')
+        contract_type: str = item.get('contract_type', 'other')
+        ext_id: str = item.get('external_id', '?')
+
+        # Krok 2: brak obu wartości → widełki nieznane, nic nie rób
+        if salary_min is None and salary_max is None:
+            return
+
+        # Krok 3: tylko jedna wartość → traktuj jako punkt, nie przedział
+        if salary_min is None:
+            salary_min = salary_max
+        elif salary_max is None:
+            salary_max = salary_min
+
+        def _zero_out(reason: str) -> None:
+            item['salary_min'] = None
+            item['salary_max'] = None
+            self.logger.warning(
+                f"[salary] {ext_id}: wyzerowano ({reason}) "
+                f"[min={salary_min}, max={salary_max}, period={period}]"
+            )
+
+        # Krok 4a: wartości ujemne lub zerowe
+        if salary_min <= 0 or salary_max <= 0:
+            _zero_out("wartość <= 0")
+            return
+
+        # Krok 4b: nieobsługiwany okres rozliczeniowy
+        if period not in ('monthly', 'hourly'):
+            _zero_out(f"nieobsługiwany period='{period}'")
+            return
+
+        # Krok 5: odwrócone widełki — zamień miejscami
+        if salary_min > salary_max:
+            salary_min, salary_max = salary_max, salary_min
+
+        # Krok 6: walidacja zakresu przez midpoint
+        midpoint: float = (salary_min + salary_max) / 2
+
+        if period == 'monthly':
+            lower_bound = SALARY_MONTH_MIN.get(contract_type, 3000.0)
+            if midpoint < lower_bound or midpoint > SALARY_MONTH_MAX:
+                _zero_out(
+                    f"midpoint={midpoint:.0f} poza zakresem "
+                    f"[{lower_bound:.0f}, {SALARY_MONTH_MAX:.0f}] monthly/{contract_type}"
+                )
+                return
+        elif period == 'hourly':
+            if midpoint < SALARY_HOUR_MIN or midpoint > SALARY_HOUR_MAX:
+                _zero_out(
+                    f"midpoint={midpoint:.1f} poza zakresem "
+                    f"[{SALARY_HOUR_MIN}, {SALARY_HOUR_MAX}] hourly"
+                )
+                return
+
+        # Zapisz ewentualnie skorygowane widełki (np. po zamianie lub uzupełnieniu)
+        item['salary_min'] = salary_min
+        item['salary_max'] = salary_max
 
     def _strip_html(self, text: str) -> str:
         """Usuwa tagi HTML z tekstu.

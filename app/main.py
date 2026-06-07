@@ -339,7 +339,12 @@ def query_skill_premium(
     top_n: int = 20,
     currency: str = "PLN",
 ) -> pd.DataFrame:
-    """Oblicza skill premium — różnicę median wynagrodzeń ofert ze/bez danego skilla.
+    """Oblicza skill premium metodą within-level.
+
+    Premium dla danego skilla to mediana odchyleń wynagrodzeń ofert ze skilliem
+    od mediany ich własnego poziomu doświadczenia. Metoda kontroluje poziom
+    doświadczenia jako zmienną zakłócającą — skille powszechne u juniorów nie
+    wychodzą sztucznie ujemnie tylko dlatego, że juniory zarabiają mniej.
 
     Args:
         levels: Filtr poziomów doświadczenia (ANY).
@@ -353,9 +358,9 @@ def query_skill_premium(
         DataFrame z kolumnami: skill_name, median_with_skill,
         median_without_skill, premium. Wartości jako float.
     """
-    query = f"""
+    query = """
         WITH base_offers AS (
-            SELECT id,
+            SELECT id, experience_level,
                    (salary_min + salary_max) / 2.0 AS midpoint
             FROM job_offers
             WHERE is_active = TRUE
@@ -367,11 +372,21 @@ def query_skill_premium(
               AND contract_type = ANY(%(contracts)s)
               AND source_portal = ANY(%(portals)s)
         ),
-        overall_median AS (
-            SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (
-                ORDER BY midpoint
-            ) AS median_salary
+        level_baseline AS (
+            -- mediana wynagrodzenia osobno dla każdego poziomu doświadczenia
+            SELECT experience_level,
+                   PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY midpoint) AS level_median
             FROM base_offers
+            GROUP BY experience_level
+        ),
+        offer_deviation AS (
+            -- odchylenie każdej oferty od mediany jej poziomu
+            SELECT bo.id,
+                   bo.midpoint,
+                   lb.level_median,
+                   (bo.midpoint - lb.level_median) AS deviation
+            FROM base_offers bo
+            JOIN level_baseline lb ON bo.experience_level = lb.experience_level
         ),
         skill_counts AS (
             SELECT skill_id, COUNT(*) AS offer_count
@@ -380,26 +395,25 @@ def query_skill_premium(
             GROUP BY skill_id
             HAVING COUNT(*) >= 10
         ),
-        skill_medians AS (
+        skill_premium AS (
             SELECT
                 st.standardized_name AS skill_name,
-                PERCENTILE_CONT(0.5) WITHIN GROUP (
-                    ORDER BY bo.midpoint
-                ) AS median_with_skill
+                -- premium = mediana odchyleń ofert ze skillem od baseline ich poziomów
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY od.deviation) AS premium,
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY od.midpoint) AS median_with_skill
             FROM offer_skills os
             JOIN skill_taxonomy st ON os.skill_id = st.id
-            JOIN base_offers bo ON os.offer_id = bo.id
+            JOIN offer_deviation od ON os.offer_id = od.id
             WHERE os.skill_id IN (SELECT skill_id FROM skill_counts)
               AND st.is_tech = TRUE
             GROUP BY st.standardized_name
         )
         SELECT
-            sm.skill_name,
-            sm.median_with_skill,
-            om.median_salary AS median_without_skill,
-            (sm.median_with_skill - om.median_salary) AS premium
-        FROM skill_medians sm
-        CROSS JOIN overall_median om
+            skill_name,
+            median_with_skill,
+            (median_with_skill - premium) AS median_without_skill,
+            premium
+        FROM skill_premium
         ORDER BY premium DESC
         LIMIT %(top_n)s
     """
@@ -713,7 +727,7 @@ def main() -> None:
         st.markdown("### Skill Premium")
 
         df_premium = query_skill_premium(levels, contracts, portals, salary_required, top_n=20)
-
+        
         if df_premium.empty:
             st.warning("⚠️ Brak danych dla wybranych filtrów.")
         else:

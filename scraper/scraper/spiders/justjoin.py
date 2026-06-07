@@ -203,18 +203,12 @@ class JustJoinSpider(scrapy.Spider):
 
         if unit_raw == "hour":
             salary_period = "hourly"
-            # Sanity-check: JustJoin bywa niespójny w polu 'unit'. Stawka godzinowa
-            # > 500 PLN nie istnieje — to faktycznie kwota miesięczna z błędnym unit.
-            midpoint = None
-            if salary_min is not None and salary_max is not None:
-                midpoint = (salary_min + salary_max) / 2.0
-            if midpoint is not None and midpoint > 500:
-                salary_period = "monthly"
         elif unit_raw == "month":
             salary_period = "monthly"
         else:
-            # Nieobsługiwany okres (Day, Year) — pomiń wynagrodzenie
-            return None, None, "PLN", "monthly", contract_type
+            # Nieobsługiwany okres (Day, Year) — przekazujemy surowy period,
+            # ValidationPipeline wyzeruje kwoty w kroku 4b (period not in monthly/hourly)
+            salary_period = unit_raw
 
         return salary_min, salary_max, "PLN", salary_period, contract_type
 
