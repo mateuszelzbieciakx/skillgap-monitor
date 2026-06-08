@@ -22,8 +22,10 @@ Projekt zrealizowany w ramach studiów na kierunku Informatyka Stosowana na Uniw
 
 ## 📸 Dashboard
 
-![SkillGap Monitor Dashboard](docs/screenshot.png)
-
+![SkillGap Monitor Dashboard](docs/screenshot1.png)
+![SkillGap Monitor Dashboard](docs/screenshot2.png)
+![SkillGap Monitor Dashboard](docs/screenshot3.png)
+![SkillGap Monitor Dashboard](docs/screenshot4.png)
 > Dashboard analityczny z trzema zakładkami: Salary Explorer, Skill Premium, Skill Gap.
 
 ---

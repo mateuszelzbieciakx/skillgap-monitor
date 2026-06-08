@@ -264,7 +264,6 @@ def query_salary_stats(
     levels: list[str],
     contracts: list[str],
     portals: list[str],
-    salary_required: bool,
     currency: str = "PLN",
 ) -> pd.DataFrame:
     """Pobiera statystyki wynagrodzeń per experience_level × contract_type.
@@ -273,7 +272,6 @@ def query_salary_stats(
         levels: Filtr poziomów doświadczenia (ANY).
         contracts: Filtr typów umów (ANY).
         portals: Filtr portali źródłowych (ANY).
-        salary_required: Gdy True, wyklucza oferty bez widełek.
         currency: Waluta (domyślnie PLN).
 
     Returns:
@@ -281,11 +279,7 @@ def query_salary_stats(
         count, p25, median, p75, min_salary, max_salary.
         Wartości wynagrodzeń jako float.
     """
-    salary_clause = (
-        "AND salary_min IS NOT NULL AND salary_max IS NOT NULL"
-        if salary_required else ""
-    )
-    query = f"""
+    query = """
         SELECT
             experience_level,
             contract_type,
@@ -310,7 +304,6 @@ def query_salary_stats(
           AND experience_level = ANY(%(levels)s)
           AND contract_type = ANY(%(contracts)s)
           AND source_portal = ANY(%(portals)s)
-          {salary_clause}
         GROUP BY experience_level, contract_type
         HAVING COUNT(*) >= 3
         ORDER BY experience_level, contract_type
@@ -335,7 +328,6 @@ def query_skill_premium(
     levels: list[str],
     contracts: list[str],
     portals: list[str],
-    salary_required: bool,
     top_n: int = 20,
     currency: str = "PLN",
 ) -> pd.DataFrame:
@@ -350,7 +342,6 @@ def query_skill_premium(
         levels: Filtr poziomów doświadczenia (ANY).
         contracts: Filtr typów umów (ANY).
         portals: Filtr portali źródłowych (ANY).
-        salary_required: Gdy True, wyklucza oferty bez widełek.
         top_n: Liczba top skilli do zwrócenia.
         currency: Waluta (domyślnie PLN).
 
@@ -438,7 +429,6 @@ def query_skill_gap(
     levels: list[str],
     contracts: list[str],
     portals: list[str],
-    salary_required: bool,
     top_n: int = 15,
 ) -> pd.DataFrame:
     """Pobiera top N skilli i rozkład must/nice dla każdego z nich.
@@ -451,17 +441,12 @@ def query_skill_gap(
         levels: Filtr poziomów doświadczenia (ANY).
         contracts: Filtr typów umów (ANY).
         portals: Filtr portali źródłowych (ANY).
-        salary_required: Gdy True, wyklucza oferty bez widełek.
         top_n: Liczba top skilli do wyłonienia.
 
     Returns:
         DataFrame z kolumnami: skill_name, requirement_type, count.
     """
-    salary_clause = (
-        "AND jo.salary_min IS NOT NULL AND jo.salary_max IS NOT NULL"
-        if salary_required else ""
-    )
-    query = f"""
+    query = """
         WITH top_skills AS (
             SELECT st.standardized_name AS skill_name
             FROM offer_skills os
@@ -471,7 +456,6 @@ def query_skill_gap(
               AND jo.experience_level = ANY(%(levels)s)
               AND jo.contract_type = ANY(%(contracts)s)
               AND jo.source_portal = ANY(%(portals)s)
-              {salary_clause}
               AND st.is_tech = TRUE
             GROUP BY st.standardized_name
             ORDER BY COUNT(*) DESC
@@ -488,7 +472,6 @@ def query_skill_gap(
           AND jo.experience_level = ANY(%(levels)s)
           AND jo.contract_type = ANY(%(contracts)s)
           AND jo.source_portal = ANY(%(portals)s)
-          {salary_clause}
           AND st.standardized_name IN (SELECT skill_name FROM top_skills)
           AND st.is_tech = TRUE
         GROUP BY st.standardized_name, os.requirement_type
@@ -559,11 +542,6 @@ def main() -> None:
             default=all_portals,
         )
 
-        salary_required: bool = st.checkbox(
-            "Tylko oferty z wynagrodzeniem",
-            value=True,
-        )
-
         with st.expander("ℹ️ O projekcie"):
             st.markdown(
                 "**Autor:** Mateusz Elżbieciak  \n"
@@ -623,7 +601,7 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-        df_salary = query_salary_stats(levels, contracts, portals, salary_required)
+        df_salary = query_salary_stats(levels, contracts, portals)
 
         if df_salary.empty:
             st.warning("⚠️ Brak danych dla wybranych filtrów.")
@@ -726,7 +704,7 @@ def main() -> None:
     with tab2:
         st.markdown("### Skill Premium")
 
-        df_premium = query_skill_premium(levels, contracts, portals, salary_required, top_n=20)
+        df_premium = query_skill_premium(levels, contracts, portals, top_n=20)
         
         if df_premium.empty:
             st.warning("⚠️ Brak danych dla wybranych filtrów.")
@@ -796,7 +774,7 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-        df_gap = query_skill_gap(levels, contracts, portals, salary_required, top_n=15)
+        df_gap = query_skill_gap(levels, contracts, portals, top_n=15)
 
         if df_gap.empty:
             st.warning("⚠️ Brak danych dla wybranych filtrów.")
