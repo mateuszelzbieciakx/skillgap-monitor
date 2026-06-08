@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS skill_taxonomy (
     id SERIAL PRIMARY KEY,
     raw_name VARCHAR(100) UNIQUE NOT NULL,
     standardized_name VARCHAR(100) NOT NULL,
-    category VARCHAR(50)
+    category VARCHAR(50),
+    is_tech BOOLEAN DEFAULT TRUE
 );
 
 CREATE TABLE IF NOT EXISTS companies (
