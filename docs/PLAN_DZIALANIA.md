@@ -3,71 +3,85 @@
 **Autor:** Mateusz Elżbieciak (indeks: 233651), UEK
 **Horyzont:** ~2 tygodnie | **Cel minimalny:** scraping (2 portale) → czysta baza → analityka w Streamlit
 
-> Ten plan opisuje sekwencję i kamienie milowe. Hierarchiczny podział zadań → `WBS.md`. Specyfikacja techniczna → `PRD_SKILLGAP.md`.
+> Ten dokument opisuje sekwencję i kamienie milowe projektu. Hierarchiczny podział zadań → `WBS.md`. Specyfikacja techniczna → `PRD_SKILLGAP.md`.
 
 ---
 
-## Stan obecny (punkt startu)
+## Stan końcowy (2026-06-08) — projekt ukończony ✅
 
-Faza fundamentów ukończona: środowisko (`uv` + Python 3.13), baza Supabase z czterema tabelami (`init_db.py` działa), trzy skille Claude Code, zaktualizowana dokumentacja (PRD, CLAUDE.md). Spider jeszcze nienapisany — to następny krok.
-
----
-
-## Tydzień 1 — Inżynieria danych (scraping + pipeline)
-
-### Dni 1-2: Szkielet Scrapy + spider NoFluff (krok 1)
-- Utworzenie projektu Scrapy (`scraper/`), konfiguracja `settings.py` zgodnie z polityką Polite Scraping (DELAY 2.5, AutoThrottle, CONCURRENT 1).
-- Definicja wspólnego `JobOfferItem` (pola docelowe niezależne od portalu).
-- Pająk NoFluff — krok 1: lista ofert (`POST /api/search/posting`, paginacja, iteracja po technologiach).
-- **Kamień milowy:** surowe oferty z 1 strony wypisane do konsoli/JSON.
-
-### Dni 3-4: Spider NoFluff (krok 2) + pipeline zapisu
-- Krok 2: pobranie szczegółów każdej oferty (`GET /api/posting/{id}`) → pełne `requirements` (musts + nices).
-- `ValidationPipeline`: czyszczenie pól JSON z HTML, ekstrakcja `contract_type` (B2B/UoP) z `salary.type`, normalizacja nazw skilli.
-- `PostgresPipeline`: zapis logiką UPSERT (`ON CONFLICT`), wstawianie skilli do `skill_taxonomy`, powiązania w `offer_skills` z `requirement_type`.
-- **Kamień milowy:** oferty z 1 strony w bazie, bez duplikatów, ze skillami.
-
-### Dzień 5: Bootstrap + walidacja danych
-- `bootstrap_skills.py` — seed słownika `skill_taxonomy` (startowe technologie + kategorie).
-- Próbny scrape kilku technologii; sanity-check (liczba rekordów, brak NULL w kluczowych polach, poprawność B2B/UoP).
-- **Kamień milowy:** stabilny pipeline, dane gotowe do rozszerzenia.
+Wszystkie fazy główne zrealizowane. Działający system end-to-end: dwa spidery Scrapy pobierają oferty z NoFluffJobs i JustJoin.it → ValidationPipeline czyści i waliduje dane → PostgresPipeline zapisuje przez UPSERT do Supabase → Streamlit Dashboard prezentuje trzy analizy HR.
 
 ---
 
-## Tydzień 2 — Drugi portal, analityka, finalizacja
+## Tydzień 1 — Inżynieria danych (scraping + pipeline) ✅
 
-### Dni 6-7: Drugi portal (JustJoin.it)
-- Weryfikacja API JustJoin.it w DevTools (endpoint, metoda, format, czy skille w liście czy w detalach).
-- Pająk JustJoin mapujący do **wspólnego `JobOfferItem`** (logika specyficzna dla portalu zamknięta w pająku).
-- **Kamień milowy:** oferty z dwóch portali w jednej bazie, deduplikacja działa.
+### Dni 1-2: Szkielet Scrapy + spider NoFluff (krok 1) ✅
+- Projekt Scrapy (`scraper/scraper/`), `settings.py` z Polite Scraping (DELAY 2.5, AutoThrottle, CONCURRENT 1).
+- Wspólny `JobOfferItem` niezależny od portalu.
+- Spider NoFluff krok 1: lista ofert (POST `/api/search/posting`, paginacja, 25 technologii).
+- **Kamień milowy:** ✅ oferty z 1 strony w bazie.
 
-### Dni 8-9: Pełny scrape próbki + analityka (silnik)
-- Pełny scrape reprezentatywnej próbki (~700-2500 ofert łącznie). Może działać w tle.
-- Implementacja trzech miar (zapytania SQL): Salary Explorer (mediana + P25/P75), Skill Premium, Skill Gap/Demand.
-- **Kamień milowy:** zapytania analityczne zwracają sensowne wyniki na realnych danych.
+### Dni 3-4: Spider NoFluff (krok 2) + pipeline zapisu ✅
+- Krok 2: szczegóły każdej oferty (`GET /api/posting/{id}`) → pełne `requirements` (musts + nices).
+- `ValidationPipeline`: czyszczenie HTML, normalizacja `contract_type`/`experience_level`, scentralizowana walidacja salary (`_validate_salary`) z progami rynkowymi per `contract_type`.
+- `PostgresPipeline`: UPSERT do `job_offers`, UPSERT `skill_taxonomy`, INSERT `offer_skills` z `requirement_type`.
+- **Kamień milowy:** ✅ oferty w bazie bez duplikatów, salary wyzerowane dla outlierów.
 
-### Dni 10-11: Dashboard Streamlit
-- Trzy zakładki = trzy statystyki HR. Interaktywne filtry (poziom, miasto, typ umowy). Wizualizacje (wykresy widełkowe, słupkowe).
-- Strona tytułowa z indeksem 233651.
-- **Kamień milowy:** działający dashboard prezentujący analizę.
-
-### Dni 12-14: Dokumentacja + bufor
-- README (setup + uruchamianie), finalizacja Raportu, strona tytułowa.
-- Porządek w historii Git (Conventional Commits), własny code review (PEP8, type hints, docstringi).
-- Bufor na obsunięcia.
-- **Kamień milowy:** projekt gotowy do oddania.
+### Dzień 5: Walidacja danych ✅
+- Próbny scrape kilku technologii; sanity-check (liczba rekordów, brak NULL w kluczowych polach).
+- **Uwaga:** `bootstrap_skills.py` (seed `skill_taxonomy`) — niezaimplementowany, pozostaje Future Work.
+- **Kamień milowy:** ✅ stabilny pipeline, dane gotowe do pełnego scrape'u.
 
 ---
 
-## Elementy opcjonalne (jeśli czas pozwoli)
+## Tydzień 2 — Drugi portal, analityka, finalizacja ✅
 
-- Trzeci portal (Bulldogjob) — kolejne źródło mapowane do wspólnego Itemu.
-- Moduł AI Text-to-SQL (BYOK) na roli `ai_read_only` — zapytania w języku naturalnym.
+### Dni 6-7: Drugi portal (JustJoin.it) ✅
+- Reverse engineering API w DevTools: GET `/api/candidate-api/offers`, paginacja offsetowa.
+- Spider jednokrokowy — wszystkie dane oferty w jednej odpowiedzi (brak kroku szczegółów).
+- Mapowanie `employmentTypes` do `JobOfferItem` z priorytetem b2b > permanent > mandate_contract.
+- Spider jako czysty maper: walidacja salary wyłącznie w `ValidationPipeline`, nie w spiderze.
+- 4 migracje SQL czyszczące dane historyczne po pełnym scrape'ie (001–004).
+- **Kamień milowy:** ✅ oferty z dwóch portali w jednej bazie, deduplikacja działa.
+
+### Dni 8-9: Pełny scrape + analityka (silnik) ✅
+- Pełny scrape: JustJoin.it 10 000 ofert + NoFluff 10 stron × 25 technologii (~10 000+ rekordów łącznie).
+- Implementacja trzech zapytań SQL: Salary Explorer (mediana + P25/P75), Skill Premium (within-level), Skill Gap (must/nice per poziom).
+- **Kamień milowy:** ✅ zapytania analityczne zwracają sensowne wyniki na realnych danych.
+
+### Dni 10-11: Dashboard Streamlit ✅
+- Trzy zakładki analityczne HR. Globalne filtry sidebar (portal, poziom, typ umowy).
+- Dark theme inspirowany Apple; Plotly custom template dla spójności wizualnej.
+- Skill Premium tooltip z komentarzem dla ujemnych wartości (korelacja z rolami junior/QA/support).
+- Autor i indeks 233651 w ekspanderze sidebar.
+- **Kamień milowy:** ✅ działający dashboard z trzema analizami.
+
+### Dni 12-14: Dokumentacja ✅
+- README.md portfolio-ready (architektura ASCII, badges, 6-krokowy setup).
+- PRD_SKILLGAP.md i CLAUDE.md zaktualizowane do stanu rzeczywistego.
+- WBS.md zaktualizowany (wszystkie zadania oznaczone jako ukończone).
+- Conventional Commits w historii Git, push do GitHub.
+- **Kamień milowy:** ✅ projekt gotowy do oddania.
 
 ---
 
-## Zasady robocze (przez cały projekt)
+## Co wyszło ponad plan
 
-- **Git:** commity w konwencji Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`), regularny `push`.
-- **Praca z asystentem:** Claude Code do pisania/edycji kodu (skille pilnują standardów); czat do decyzji architektonicznych i weryfikacji API.
-- **Bezpieczeństwo:** `.env` nigdy do repo; brak zahardkodowanych haseł.
+- **Scentralizowana walidacja salary** w `ValidationPipeline._validate_salary` — spidery są czystymi maperami, cała logika walidacyjna w jednym miejscu.
+- **4 migracje SQL** — konieczne po pełnym scrape'ie do oczyszczenia danych historycznych (salary bugs, normalizacja skill_taxonomy, flaga is_tech).
+- **Skill Premium within-level** — metoda kontrolująca poziom doświadczenia jako zmienną zakłócającą (planowano prostszy ranking).
+- **NoFluff rozszerzony do 25 technologii** — pierwotnie mniejsza lista.
+
+## Elementy niezrealizowane
+
+- `bootstrap_skills.py` — seed startowy `skill_taxonomy` (Future Work).
+- Trzeci portal Bulldogjob (opcjonalne).
+- Moduł AI Text-to-SQL (Future Work).
+
+---
+
+## Zasady robocze (zastosowane przez cały projekt)
+
+- **Git:** Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`), regularny `push` do GitHub.
+- **Praca z asystentem:** Claude Code do pisania/edycji kodu (skille pilnują standardów PEP8, type hints, docstrings).
+- **Bezpieczeństwo:** `.env` nigdy do repo; brak zahardkodowanych haseł; rola `ai_read_only` tylko SELECT.

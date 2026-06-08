@@ -7,7 +7,7 @@
 
 ## 1. Architektura Systemu i Technologie
 
-- **Język:** Python 3.11+
+- **Język:** Python 3.13
 - **Dependency Management:** `uv` (nie pip)
 - **Scraping:** Scrapy (JSON API, nie HTML parsing)
 - **Baza Danych:** PostgreSQL (Supabase)
@@ -24,9 +24,16 @@
    - `CONCURRENT_REQUESTS_PER_DOMAIN = 1`
    - User-Agent: realny (Mozilla/5.0)
 
-2. **Źródło danych:** NoFluffJobs API
-   - Faza 1: `/api/search/posting` — lista ofert (pagination)
-   - Faza 2: `/api/posting/{id}` — szczegóły + pełne requirements
+2. **Źródła danych:** dwa portale
+
+   **NoFluffJobs** (spider dwustopniowy):
+   - Krok 1: POST `/api/search/posting` — lista ofert per technologia (paginacja)
+   - Krok 2: GET `/api/posting/{id}` — szczegóły + pełne requirements
+   - Scraping per-technologia (25 tech) — portal multi-branżowy, brak filtra "całe IT"
+
+   **JustJoin.it** (spider jednokrokowy):
+   - GET `/api/candidate-api/offers?from={offset}&itemsCount=100` — paginacja offsetowa
+   - Wszystkie dane oferty w jednej odpowiedzi, brak kroku szczegółów
 
 3. **Deduplikacja:** `source_portal + external_id` (UNIQUE)
 
@@ -38,7 +45,7 @@
    - `ai_read_only` role — hasło z `.env` (nie hardkod)
    - SELECT-only, brak INSERT/UPDATE
 
-7. **Bootstrap:** Skrypt `init_skill_taxonomy.py` wypełnia `skill_taxonomy` startowymi danymi
+7. **Bootstrap:** Skrypt `bootstrap_skills.py` wypełnia `skill_taxonomy` startowymi danymi (Future Work — skrypt jeszcze nie istnieje)
 
 ---
 
@@ -50,7 +57,8 @@ CREATE TABLE skill_taxonomy (
     id SERIAL PRIMARY KEY,
     raw_name VARCHAR(100) UNIQUE NOT NULL,
     standardized_name VARCHAR(100) NOT NULL,
-    category VARCHAR(50)
+    category VARCHAR(50),
+    is_tech BOOLEAN DEFAULT TRUE  -- filtr technologiczny w zapytaniach Streamlit
 );
 
 -- Firmy
@@ -99,49 +107,62 @@ GRANT SELECT ON skill_taxonomy, companies, job_offers, offer_skills TO ai_read_o
 
 ## 4. Fazy Realizacji
 
-### Faza 1: Środowisko + Baza Danych (Dzień 1)
-- [ ] `uv init` + `pyproject.toml`
-- [ ] `.env` z `DATABASE_URL`
-- [ ] `init_db.py` — wdraża schema (idempotentny)
-- [ ] Test: schema załadowany, tabele puste
+### Faza 1: Środowisko + Baza Danych ✅
+- [x] `uv init` + `pyproject.toml`
+- [x] `.env` z `DATABASE_URL`
+- [x] `init_db.py` — wdraża schema (idempotentny, w katalogu głównym)
+- [x] Test: schema załadowany, tabele puste
 
-### Faza 2: Spider (Dni 2-3)
-- [ ] Scrapy project structure
-- [ ] `NoFluffJobsSpider` — dwustopniowy:
-  - Krok 1: `/api/search/posting` — iteracja po stronach
-  - Krok 2: `/api/posting/{id}` — szczegóły każdej oferty
-- [ ] `JobOfferItem` + `RequirementItem`
-- [ ] Test: 1 strona (20 ofert) załadowana do konsoli
+### Faza 2: Spider NoFluffJobs ✅
+- [x] Scrapy project structure (`scraper/scraper/`)
+- [x] `NoFluffJobsSpider` — dwustopniowy, 25 technologii, 10 stron/tech:
+  - Krok 1: POST `/api/search/posting` — iteracja po stronach per technologia
+  - Krok 2: GET `/api/posting/{id}` — szczegóły każdej oferty
+- [x] Wspólny `JobOfferItem` dla wszystkich portali
+- [x] Test: dane w bazie bez duplikatów
 
-### Faza 3: Pipelines (Dni 3-4)
-- [ ] `ValidationPipeline` — czyszczenie i normalizacja:
-  - Ekstraktowanie `contract_type` z `salary.type`
-  - Normalizacja nazw skilli (lowercase, trim)
-  - Walidacja pól wymaganych
-- [ ] `PostgresPipeline` — zapis do bazy:
-  - UPSERT do `job_offers` (ON CONFLICT)
-  - Wstawianie skilli do `skill_taxonomy` (idempotentny insert)
-  - Łączenie w `offer_skills` z `requirement_type`
-- [ ] Test: 1 strona w bazie bez duplikatów
+### Faza 3: Pipelines ✅
+- [x] `ValidationPipeline` — czyszczenie i normalizacja:
+  - Normalizacja `experience_level` (junior/mid/senior/lead) i `contract_type` (b2b/uop/uod/other)
+  - Usuwanie tagów HTML z pól tekstowych
+  - Scentralizowana walidacja salary (`_validate_salary`): progi rynkowe per `contract_type`
+    (B2B min 6 000 PLN/mies., hourly 20–500 PLN), obsługa odwróconych widełek,
+    passthrough nieobsługiwanych `salary_period` do wyzerowania
+  - Odrzucenie (DropItem) tylko przy braku `external_id` lub `source_portal`
+- [x] `PostgresPipeline` — zapis do bazy:
+  - UPSERT do `job_offers` (ON CONFLICT `source_portal, external_id`)
+  - UPSERT do `skill_taxonomy`, INSERT `offer_skills` z `requirement_type`
+- [x] Test: baza bez duplikatów, salary wyzerowane dla outlierów
 
-### Faza 4: Pełny Scrape + Bootstrap (Dzień 5)
-- [ ] `init_skill_taxonomy.py` — seed danych (Python, Django, React, ...)
-- [ ] Pełny scrape: wszystkie strony (może być overnight)
-- [ ] Sanity check: liczba rekordów, brak NULL w kluczowych polach
+### Faza 4: Drugi portal (JustJoin.it) ✅
+- [x] `JustJoinSpider` — jednokrokowy GET, paginacja offsetowa, do 10 000 ofert
+- [x] Mapowanie `employmentTypes` → wspólny `JobOfferItem` (priorytet: b2b > permanent > mandate_contract)
+- [x] Spider jako czysty maper — walidacja salary wyłącznie w `ValidationPipeline`
+- [x] 4 migracje SQL czyszczące dane historyczne:
+  - `001` normalizacja `standardized_name` w `skill_taxonomy`
+  - `002` dodanie flagi `is_tech`
+  - `003` czyszczenie salary bugs JustJoin
+  - `004` globalne czyszczenie salary outlierów
 
-### Faza 5: Streamlit + Analityka (Dni 5-6)
-- [ ] 3 główne statystyki (HR-friendly):
-  1. **Salary Explorer** — mediana + P25/P75 × level × contract type
-  2. **Skill Premium** — ranking skilli wg wpływu na medianę pensji
-  3. **Skill Gap / Demand** — ranking skilli per poziom doświadczenia
-- [ ] Interaktywne filtry (poziom, miasto, typ umowy)
-- [ ] Strona tytułowa z indeksem 233651
+### Faza 5: Pełny Scrape + Bootstrap ✅
+- [x] Pełny scrape: JustJoin 10 000 ofert + NoFluff 10 stron × 25 technologii
+- [x] Sanity check: liczba rekordów, brak NULL w kluczowych polach
+- [ ] `bootstrap_skills.py` — seed `skill_taxonomy` (Future Work — skrypt niezaimplementowany)
 
-### Faza 6: Dokumentacja + Bufor (Dzień 7)
-- [ ] README.md (instrukcja setup + uruchamiania)
-- [ ] Strona tytułowa (PDF lub markdown) — indeks, imię, nazwisko
-- [ ] Conventional Commits w Git
-- [ ] Code review własny (PEP8, type hints, docstrings)
+### Faza 6: Streamlit + Analityka ✅
+- [x] 3 zakładki analityczne (HR-friendly):
+  1. **Salary Explorer** — mediana + P25/P75 × level × contract type (tylko `salary_period='month'`)
+  2. **Skill Premium** — metoda within-level: mediana odchyleń ofert ze skillem od mediany poziomu;
+     kontroluje experience_level jako zmienną zakłócającą
+  3. **Skill Gap** — ranking top 15 skilli per poziom: must-have vs nice-to-have
+- [x] Globalne filtry sidebar: portal, poziom doświadczenia, typ umowy
+- [x] Dark theme inspirowany Apple, Plotly custom template
+
+### Faza 7: Dokumentacja ✅
+- [x] `README.md` — portfolio-ready (architektura, setup, badges)
+- [x] `docs/RAPORT.md` — raport zaliczeniowy (indeks 233651)
+- [x] Conventional Commits w Git
+- [x] PEP8, type hints, Google-style docstrings
 
 ---
 
@@ -157,9 +178,9 @@ GRANT SELECT ON skill_taxonomy, companies, job_offers, offer_skills TO ai_read_o
 
 ---
 
-## 6. Dane z NoFluffJobs API
+## 6. Dane z API portali
 
-### Endpoint 1: Lista ofert
+### NoFluffJobs — Endpoint 1: Lista ofert
 ```
 POST /api/search/posting?pageFrom=1&pageTo=1&pageSize=20&...
 Content-Type: application/infiniteSearch+json
@@ -188,7 +209,7 @@ Response:
 }
 ```
 
-### Endpoint 2: Szczegóły oferty
+### NoFluffJobs — Endpoint 2: Szczegóły oferty
 ```
 GET /api/posting/{id}
 
@@ -212,28 +233,64 @@ Response:
 }
 ```
 
+### JustJoin.it — Endpoint: Lista ofert
+```
+GET /api/candidate-api/offers?from={offset}&itemsCount=100&sortBy=publishedAt&orderBy=descending
+Accept: application/json
+
+Response:
+{
+  "data": [
+    {
+      "guid": "...",
+      "slug": "...",
+      "title": "Job Title",
+      "companyName": "Company",
+      "experienceLevel": "mid",
+      "workplaceType": "remote",
+      "city": "Kraków",
+      "employmentTypes": [
+        {
+          "type": "b2b",
+          "currency": "PLN",
+          "currencySource": "original",
+          "unit": "month",
+          "from": 18000,
+          "to": 25000
+        }
+      ],
+      "requiredSkills": [{ "name": "Python" }],
+      "niceToHaveSkills": [{ "name": "FastAPI" }]
+    }
+  ],
+  "meta": { "next": { "cursor": 100 } }
+}
+```
+
 ---
 
 ## 7. Metryki na zaliczenie
 
-✅ **Scraping:** 500+ ofert z NoFluff  
-✅ **Baza:** Czysta, bez duplikatów, z umiejętnościami  
-✅ **Analityka:** 3 wiarygodne statystyki (HR-ready)  
-✅ **UI:** Streamlit z filtrami i wizualizacją  
-✅ **Kod:** Clean Code, dokumentacja, indeks 233651  
-✅ **Git:** Historia commitów, proper messages  
+✅ **Scraping:** 10 000+ ofert z JustJoin.it + NoFluffJobs (2 portale)  
+✅ **Baza:** Czysta, bez duplikatów, z umiejętnościami, 4 migracje SQL  
+✅ **Analityka:** 3 zakładki HR-ready (Salary Explorer, Skill Premium within-level, Skill Gap)  
+✅ **UI:** Streamlit z filtrami, dark theme, Plotly  
+✅ **Kod:** Clean Code, PEP8, type hints, Google docstrings, indeks 233651  
+✅ **Git:** Historia commitów, Conventional Commits  
 
 ---
 
 ## 8. Future Work (Po zaliczeniu)
 
-- [ ] Integracja z justjoin.it, pracuj.pl (multi-portal)
-- [ ] Text-to-SQL AI module (BYOK OpenAI)
-- [ ] Deployment na Vercel/Railway
+- [x] ~~Integracja z justjoin.it~~ — zaimplementowane
+- [ ] Trzeci portal: Bulldogjob
+- [ ] `bootstrap_skills.py` — seed startowy `skill_taxonomy`
+- [ ] Text-to-SQL AI module (BYOK) — zapytania przez rolę `ai_read_only`
+- [ ] Scheduled scraping (GitHub Actions cron lub AWS EventBridge)
+- [ ] Wdrożenie chmurowe (AWS EC2 + RDS lub Railway)
 - [ ] Docker containerization
-- [ ] Scheduled scraping (cron/APScheduler)
-- [ ] Redis caching dla analityki
+- [ ] Testy jednostkowe `ValidationPipeline._validate_salary` (pytest)
 
 ---
 
-**Status:** Ready for execution (Dzień 1 start)
+**Status:** Zrealizowany (2026-06-08). Wszystkie fazy główne ukończone.
